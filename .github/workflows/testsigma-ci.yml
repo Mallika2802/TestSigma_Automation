@@ -30,10 +30,9 @@ jobs:
         shell: bash
         env:
           TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}
-          TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }}  # e.g., 40
+          TESTSIGMA_TESTPLAN_ID: 14398
+          TESTSIGMA_ENVIRONMENT_ID: 40
           TESTSIGMA_API_URL: ${{ env.TESTSIGMA_API_URL }}
-          RUNTIME_DATA_INPUT: ${{ env.RUNTIME_DATA_INPUT }}
         run: |
           echo "Triggering TestSigma execution..."
 
