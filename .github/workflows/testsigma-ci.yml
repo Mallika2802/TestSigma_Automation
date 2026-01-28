@@ -1,83 +1,84 @@
-name: TestSigma CI
+- name: Poll TestSigma Execution Status (with debug)
+  shell: bash
+  env:
+    TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
+    TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
+    RUN_ID: ${{ env.RUN_ID }}
+  run: |
+    echo "Polling status for run $RUN_ID"
+    ATTEMPTS=72   # 12 minutes
+    SLEEP_SECS=10
+    FINAL_STATUS=""
 
-on:
-  workflow_dispatch: {}
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    for i in $(seq 1 $ATTEMPTS); do
+      # Capture HTTP code too
+      HTTP=$(curl -s -w "%{http_code}" -o status.json \
+        -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+        -H "accept: application/json" \
+        "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
 
-jobs:
-  testsigma:
-    runs-on: ubuntu-latest
+      if [[ "$i" -eq 1 ]]; then
+        echo "----- First status.json -----"
+        cat status.json || true
+        echo "----------------------------"
+      fi
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      echo "HTTP=$HTTP"
 
-      - name: Install jq
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq
+      if [[ "$HTTP" == "401" ]]; then
+        echo "❌ Unauthorized while polling. Check TESTSIGMA_API_KEY."
+        exit 1
+      fi
+      if [[ "$HTTP" == "404" ]]; then
+        echo "❌ Run not found (404). RUN_ID may be incorrect for this tenant."
+        echo "Body:"
+        cat status.json || true
+        exit 1
+      fi
 
-      # ⬇️ Paste the Trigger step right here
-      - name: Trigger TestSigma Execution
-        id: trigger
-        shell: bash
-        env:
-          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}
-          TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }}
-          TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
-          RUNTIME_DATA_INPUT: "url=https://test.compliance-hub.trustage.com"
-        run: |
-          # (the block from above)
+      STATUS=$(jq -r '
+        .result // .status // .state // .executionStatus // .data.status // .data.result // .data.state
+      ' status.json)
 
-      - name: Poll TestSigma Execution Status
-        shell: bash
-        env:
-          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
-          RUN_ID: ${{ env.RUN_ID }}
-        run: |
-          echo "Polling status for run $RUN_ID"
-          ATTEMPTS=60
-          SLEEP_SECS=10
-          FINAL_STATUS=""
-          for i in $(seq 1 $ATTEMPTS); do
-            STATUS_RESPONSE=$(curl -s \
-              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-              -H "accept: application/json" \
-              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
-            echo "$STATUS_RESPONSE" > testsigma-status.json
+      echo "[Attempt $i/$ATTEMPTS] Status = $STATUS"
 
-            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.result // .status // .state // .executionStatus')
-            echo "[Attempt $i/$ATTEMPTS] Status = $STATUS"
-
-            case "$STATUS" in
-              SUCCESS|PASSED|COMPLETED) FINAL_STATUS="$STATUS"; break ;;
-              FAILED|ERROR|ABORTED)     FINAL_STATUS="$STATUS"; break ;;
-              *) sleep $SLEEP_SECS ;;
-            esac
-          done
-
-          if [[ -z "$FINAL_STATUS" ]]; then
-            echo "❌ Timed out waiting for run $RUN_ID"
-            exit 1
+      case "$STATUS" in
+        SUCCESS|PASSED|COMPLETED)
+          FINAL_STATUS="$STATUS"
+          break
+          ;;
+        FAILED|ERROR|ABORTED)
+          FINAL_STATUS="$STATUS"
+          break
+          ;;
+        null|"")
+          # keep waiting
+          ;;
+        *)
+          # some tenants return RUNNING/IN_PROGRESS
+          if [[ "$STATUS" == "RUNNING" || "$STATUS" == "IN_PROGRESS" ]]; then
+            :
           fi
+          ;;
+      esac
 
-          echo "Final status: $FINAL_STATUS"
-          if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
-            echo "❌ TestSigma run finished with a failing status: $FINAL_STATUS"
-            exit 1
-          fi
+      sleep $SLEEP_SECS
+    done
 
-          echo "✅ TestSigma execution completed successfully."
+    echo "----- Final status.json -----"
+    cat status.json || true
+    echo "-----------------------------"
 
-      - name: Upload TestSigma Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: testsigma-execution-${{ env.RUN_ID }}
-          path: |
-            response.json
-            testsigma-status.json
+    if [[ -z "$FINAL_STATUS" ]]; then
+      echo "❌ Timed out waiting for run $RUN_ID"
+      exit 1
+    fi
+
+    echo "Final status: $FINAL_STATUS"
+    if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
+      echo "❌ TestSigma run finished with a failing status: $FINAL_STATUS"
+      exit 1
+    fi
+
+    echo "✅ TestSigma execution completed successfully."
+``
