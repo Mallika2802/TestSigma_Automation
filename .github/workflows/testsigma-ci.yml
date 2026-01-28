@@ -13,7 +13,7 @@ jobs:
 
     env:
       TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
-      # Optional: runtime variables that your Testsigma steps use (e.g., {{url}} in steps)
+      # Optional runtime data your Testsigma steps can read (use {{url}} in steps)
       RUNTIME_DATA_INPUT: "url=https://test.compliance-hub.trustage.com"
 
     steps:
@@ -37,7 +37,6 @@ jobs:
         run: |
           echo "Triggering TestSigma execution..."
 
-          # Send executionId + environmentId (per CI doc)
           RESPONSE=$(curl -s -X POST \
             -H "accept: application/json" \
             -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
@@ -55,7 +54,7 @@ JSON
           echo "$RESPONSE" > response.json
           echo "Trigger response saved to response.json"
 
-          # Extract run id across common tenant variants
+          # Extract run id across common variants
           RUN_ID=$(echo "$RESPONSE" | jq -r '.id // .runId // .data.id // .data.runId')
           if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
             echo "❌ Could not extract RUN ID from trigger response."
@@ -66,7 +65,7 @@ JSON
           echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
           echo "Triggered TestSigma Run ID: $RUN_ID"
 
-      - name: Poll TestSigma Execution Status (with debug)
+      - name: Poll TestSigma Execution Status
         shell: bash
         env:
           TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
@@ -81,76 +80,3 @@ JSON
 
           for i in $(seq 1 $ATTEMPTS); do
             HTTP=$(curl -s -w "%{http_code}" -o status.json \
-              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-              -H "accept: application/json" \
-              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
-
-            if [[ "$i" -eq 1 ]]; then
-              echo "----- First status.json -----"
-              cat status.json || true
-              echo "----------------------------"
-            fi
-
-            echo "[Attempt $i/$ATTEMPTS] HTTP=$HTTP"
-
-            if [[ "$HTTP" == "401" ]]; then
-              echo "❌ Unauthorized while polling. Check TESTSIGMA_API_KEY."
-              exit 1
-            fi
-            if [[ "$HTTP" == "404" ]]; then
-              echo "❌ Run not found (404). RUN_ID may be invalid."
-              echo "Body:"
-              cat status.json || true
-              exit 1
-            fi
-
-            STATUS=$(jq -r '.result // .status // .state // .executionStatus // .data.status // .data.result // .data.state' status.json)
-            echo "Status = $STATUS"
-
-            case "$STATUS" in
-              SUCCESS|PASSED|COMPLETED)
-                FINAL_STATUS="$STATUS"
-                break
-                ;;
-              FAILED|ERROR|ABORTED)
-                FINAL_STATUS="$STATUS"
-                break
-                ;;
-              null|"")
-                # keep waiting
-                ;;
-              *)
-                # Some tenants use RUNNING/IN_PROGRESS
-                if [[ "$STATUS" == "RUNNING" || "$STATUS" == "IN_PROGRESS" ]]; then
-                  :
-                fi
-                ;;
-            esac
-
-            sleep $SLEEP_SECS
-          done
-
-          echo "----- Final status.json -----"
-          cat status.json || true
-          echo "-----------------------------"
-
-          if [[ -z "$FINAL_STATUS" ]]; then
-            echo "❌ Timed out waiting for run $RUN_ID"
-            exit 1
-          fi
-
-          echo "Final status: $FINAL_STATUS"
-          if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
-            echo "❌ TestSigma run finished with failing status: $FINAL_STATUS"
-            exit 1
-          fi
-
-          echo "✅ TestSigma execution completed successfully."
-
-      - name: Upload TestSigma Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: testsigma-execution-${{ env.RUN_ID }}
-          path: |
-            response.json
-            status.json
