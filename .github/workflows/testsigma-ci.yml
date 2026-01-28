@@ -1,64 +1,63 @@
-- name: Poll TestSigma Execution Status
+name: TestSigma CI
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  testsigma:
+    runs-on: ubuntu-latest
+
+    env:
+      TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
+
+    steps:
+      - name: Install jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Trigger TestSigma Execution (numbers only)
+        id: trigger
         shell: bash
         env:
           TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
-          RUN_ID: ${{ env.RUN_ID }}
+          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}       # e.g., 4398
+          TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }} # e.g., 40
+          TESTSIGMA_API_URL: ${{ env.TESTSIGMA_API_URL }}
         run: |
-          echo "Polling status for run $RUN_ID"
+          echo "Triggering TestSigma execution..."
 
-          ATTEMPTS=60
-          SLEEP_SECS=10
-          FINAL_STATUS=""
+          # Build JSON with numeric IDs (endpoint expects numbers)
+          payload=$(jq -n \
+            --arg exec "$TESTSIGMA_TESTPLAN_ID" \
+            --arg envId "$TESTSIGMA_ENVIRONMENT_ID" \
+            '{executionId:($exec|tonumber), environmentId:($envId|tonumber)}')
 
-          for ((i=1; i<=ATTEMPTS; i++)); do
-            HTTP=$(curl -s -w "%{http_code}" -o status.json \
-              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-              -H "accept: application/json" \
-              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
+          echo "Trigger payload:"
+          echo "$payload"
 
-            STATUS=$(jq -r '.result // .status // .state // .executionStatus // .data.status // .data.result // .data.state' status.json)
+          # Send request; capture HTTP code and body
+          HTTP=$(curl -s -w "%{http_code}" -o response.json \
+            -X POST \
+            -H "accept: application/json" \
+            -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+            -H "Content-Type: application/json" \
+            "${TESTSIGMA_API_URL}/execution_results" \
+            -d "$payload")
 
-            echo "[Attempt $i/$ATTEMPTS] HTTP=$HTTP STATUS=$STATUS"
+          echo "HTTP=$HTTP"
+          echo "Trigger response saved to response.json"
+          cat response.json || true
 
-            if [[ "$HTTP" == "401" ]]; then
-              echo "❌ Unauthorized! Check your API key."
-              exit 1
-            fi
-
-            if [[ "$HTTP" == "404" ]]; then
-              echo "❌ Run not found! RUN_ID might be wrong."
-              cat status.json || true
-              exit 1
-            fi
-
-            case "$STATUS" in
-              SUCCESS|PASSED|COMPLETED)
-                FINAL_STATUS="$STATUS"
-                break
-                ;;
-              FAILED|ERROR|ABORTED)
-                FINAL_STATUS="$STATUS"
-                break
-                ;;
-            esac
-
-            sleep $SLEEP_SECS
-          done
-
-          echo "Final status JSON:"
-          cat status.json || true
-
-          if [[ -z "$FINAL_STATUS" ]]; then
-            echo "❌ Timed out waiting for TestSigma run to finish"
+          if [[ "$HTTP" != "200" && "$HTTP" != "201" ]]; then
+            echo "❌ Trigger failed (HTTP $HTTP)."
             exit 1
           fi
 
-          echo "Final status: $FINAL_STATUS"
-
-          if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
-            echo "❌ TestSigma run failed with status: $FINAL_STATUS"
-            exit 1
-          fi
-
-          echo "✅ TestSigma execution completed successfully."
+          # Extract run id
+          RUN_ID=$(jq -r '.id // .runId // .data.id // .data.runId' response.json)
+          if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
