@@ -1,84 +1,77 @@
-- name: Poll TestSigma Execution Status (with debug)
-  shell: bash
-  env:
-    TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-    TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
-    RUN_ID: ${{ env.RUN_ID }}
-  run: |
-    echo "Polling status for run $RUN_ID"
-    ATTEMPTS=72   # 12 minutes
-    SLEEP_SECS=10
-    FINAL_STATUS=""
+jobs:
+  testsigma:
+    runs-on: ubuntu-latest
 
-    for i in $(seq 1 $ATTEMPTS); do
-      # Capture HTTP code too
-      HTTP=$(curl -s -w "%{http_code}" -o status.json \
-        -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-        -H "accept: application/json" \
-        "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
+    steps:
+      - name: Poll TestSigma Execution Status (with debug)
+        shell: bash
+        env:
+          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
+          TESTSIGMA_API_URL: https://app.testsigma.com/api/v1
+          RUN_ID: ${{ env.RUN_ID }}
+        run: |
+          echo "Polling status for run $RUN_ID"
+          ATTEMPTS=72   # 12 minutes
+          SLEEP_SECS=10
+          FINAL_STATUS=""
 
-      if [[ "$i" -eq 1 ]]; then
-        echo "----- First status.json -----"
-        cat status.json || true
-        echo "----------------------------"
-      fi
+          for i in $(seq 1 $ATTEMPTS); do
+            HTTP=$(curl -s -w "%{http_code}" -o status.json \
+              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+              -H "accept: application/json" \
+              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
 
-      echo "HTTP=$HTTP"
+            if [[ "$i" -eq 1 ]]; then
+              echo "----- First status.json -----"
+              cat status.json || true
+              echo "----------------------------"
+            fi
 
-      if [[ "$HTTP" == "401" ]]; then
-        echo "❌ Unauthorized while polling. Check TESTSIGMA_API_KEY."
-        exit 1
-      fi
-      if [[ "$HTTP" == "404" ]]; then
-        echo "❌ Run not found (404). RUN_ID may be incorrect for this tenant."
-        echo "Body:"
-        cat status.json || true
-        exit 1
-      fi
+            echo "HTTP=$HTTP"
 
-      STATUS=$(jq -r '
-        .result // .status // .state // .executionStatus // .data.status // .data.result // .data.state
-      ' status.json)
+            if [[ "$HTTP" == "401" ]]; then
+              echo "❌ Unauthorized while polling. Check TESTSIGMA_API_KEY."
+              exit 1
+            fi
 
-      echo "[Attempt $i/$ATTEMPTS] Status = $STATUS"
+            if [[ "$HTTP" == "404" ]]; then
+              echo "❌ Run not found (404). RUN_ID may be incorrect."
+              cat status.json || true
+              exit 1
+            fi
 
-      case "$STATUS" in
-        SUCCESS|PASSED|COMPLETED)
-          FINAL_STATUS="$STATUS"
-          break
-          ;;
-        FAILED|ERROR|ABORTED)
-          FINAL_STATUS="$STATUS"
-          break
-          ;;
-        null|"")
-          # keep waiting
-          ;;
-        *)
-          # some tenants return RUNNING/IN_PROGRESS
-          if [[ "$STATUS" == "RUNNING" || "$STATUS" == "IN_PROGRESS" ]]; then
-            :
+            STATUS=$(jq -r '
+              .result // .status // .state // .executionStatus // .data.status // .data.result // .data.state
+            ' status.json)
+
+            echo "[Attempt $i/$ATTEMPTS] Status = $STATUS"
+
+            case "$STATUS" in
+              SUCCESS|PASSED|COMPLETED|FAILED|ERROR|ABORTED)
+                FINAL_STATUS="$STATUS"
+                break
+                ;;
+              RUNNING|IN_PROGRESS|"")
+                ;;
+            esac
+
+            sleep $SLEEP_SECS
+          done
+
+          echo "----- Final status.json -----"
+          cat status.json || true
+          echo "-----------------------------"
+
+          if [[ -z "$FINAL_STATUS" ]]; then
+            echo "❌ Timed out waiting for run $RUN_ID"
+            exit 1
           fi
-          ;;
-      esac
 
-      sleep $SLEEP_SECS
-    done
+          echo "Final status: $FINAL_STATUS"
 
-    echo "----- Final status.json -----"
-    cat status.json || true
-    echo "-----------------------------"
+          if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
+            echo "❌ TestSigma run failed: $FINAL_STATUS"
+            exit 1
+          fi
 
-    if [[ -z "$FINAL_STATUS" ]]; then
-      echo "❌ Timed out waiting for run $RUN_ID"
-      exit 1
-    fi
-
-    echo "Final status: $FINAL_STATUS"
-    if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
-      echo "❌ TestSigma run finished with a failing status: $FINAL_STATUS"
-      exit 1
-    fi
-
-    echo "✅ TestSigma execution completed successfully."
-``
+          echo "✅ TestSigma execution completed successfully."
