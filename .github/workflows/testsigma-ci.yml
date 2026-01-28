@@ -32,6 +32,7 @@ jobs:
           RUNTIME_DATA_INPUT: ${{ env.RUNTIME_DATA_INPUT }}
         run: |
           echo "Triggering TestSigma execution..."
+         
 
           RESPONSE=$(curl -s -X POST \
             -H "accept: application/json" \
@@ -40,7 +41,8 @@ jobs:
             "${TESTSIGMA_API_URL}/execution_results" \
             -d "{
                   \"executionId\": \"${TESTSIGMA_TESTPLAN_ID}\",
-                  \"environment\": \"${RUNTIME_DATA_INPUT}\"
+                  \"environment\": \"${RUNTIME_DATA_INPUT}\",
+                  \"machineId\": \"4838\"
                 }")
 
           echo "$RESPONSE" > response.json
