@@ -1,0 +1,95 @@
+name: TestSigma CI
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  testsigma:
+    runs-on: ubuntu-latest
+
+    env:
+      TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
+      RUNTIME_DATA_INPUT: "url=https://test.compliance-hub.trustage.com"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Trigger TestSigma Execution
+        id: trigger
+        env:
+          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
+          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}
+          RUNTIME_DATA_INPUT: ${{ env.RUNTIME_DATA_INPUT }}
+        run: |
+          echo "Triggering TestSigma execution..."
+
+          RESPONSE=$(curl -s -X POST \
+            -H "accept: application/json" \
+            -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+            -H "Content-Type: application/json" \
+            "${TESTSIGMA_API_URL}/execution_results" \
+            -d "{
+                  \"executionId\": \"${TESTSIGMA_TESTPLAN_ID}\",
+                  \"environment\": \"${RUNTIME_DATA_INPUT}\"
+                }")
+
+          echo "$RESPONSE" > response.json
+
+          RUN_ID=$(echo "$RESPONSE" | jq -r '.id // .runId')
+          if [[ "$RUN_ID" == "null" || -z "$RUN_ID" ]]; then
+            echo "❌ Could not extract RUN ID."
+            cat response.json
+            exit 1
+          fi
+
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+          echo "Triggered TestSigma Run ID: $RUN_ID"
+
+      - name: Poll TestSigma Execution Status
+        env:
+          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
+          RUN_ID: ${{ env.RUN_ID }}
+        run: |
+          echo "Polling status for run $RUN_ID"
+
+          for i in {1..60}; do
+            STATUS_RESPONSE=$(curl -s \
+              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
+
+            echo "$STATUS_RESPONSE" > testsigma-status.json
+
+            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.result // .status // .state')
+
+            echo "[Attempt $i] Status = $STATUS"
+
+            if [[ "$STATUS" =~ ^(SUCCESS|FAILED|ERROR|COMPLETED)$ ]]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ "$STATUS" != "SUCCESS" ]]; then
+            echo "❌ TestSigma run failed with status: $STATUS"
+            exit 1
+          fi
+
+          echo "✅ TestSigma execution completed successfully."
+
+      - name: Upload TestSigma Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: testsigma-execution-${{ env.RUN_ID }}
+          path: |
+            response.json
+            testsigma-status.json
