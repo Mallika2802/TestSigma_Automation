@@ -103,7 +103,7 @@ jobs:
 
             case "$STATUS" in
               SUCCESS|PASSED|COMPLETED) FINAL_STATUS="$STATUS"; break ;;
-              FAILED|ERROR|ABORTED)     FINAL_STATUS="$STATUS"; break ;;
+              FAILED|FAILURE|ERROR|ABORTED)     FINAL_STATUS="$STATUS"; break ;;
             esac
 
             sleep $SLEEP_SECS
