@@ -1,134 +1,54 @@
-name: TestSigma CI
+name: Testsigma - Run Test Plan
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   testsigma:
     runs-on: ubuntu-latest
 
     env:
-      TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
+      TESTSIGMA_BASE_URL: https://app.testsigma.com
 
     steps:
       - name: Install jq
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      # ---- TRIGGER (minimal & robust) ----
-      - name: Trigger TestSigma Execution (numbers only)
+      - name: Trigger Testsigma Execution (Test Plan)
         id: trigger
-        shell: bash
         env:
           TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}       # 4398
-          TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }} # 40
-          TESTSIGMA_API_URL: ${{ env.TESTSIGMA_API_URL }}
+          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}
+          TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }}
         run: |
-          set -euo pipefail
-          echo "Triggering TestSigma execution..."
+          set -e
 
-          # Build a clean JSON payload with numeric IDs (no heredoc; no special quoting)
-          payload=$(jq -n \
-            --arg exec "$TESTSIGMA_TESTPLAN_ID" \
-            --arg envId "$TESTSIGMA_ENVIRONMENT_ID" \
-            '{executionId:($exec|tonumber), environmentId:($envId|tonumber)}')
+          echo "Triggering Testsigma Test Plan..."
+          echo "Test Plan ID: $TESTSIGMA_TESTPLAN_ID"
+          echo "Environment ID: $TESTSIGMA_ENVIRONMENT_ID"
+
+          PAYLOAD=$(jq -n \
+            --arg executionId "$TESTSIGMA_TESTPLAN_ID" \
+            --arg environmentId "$TESTSIGMA_ENVIRONMENT_ID" \
+            '{executionId: $executionId, environmentId: $environmentId}')
 
           echo "Trigger payload:"
-          echo "$payload"
+          echo "$PAYLOAD"
 
-          # Send request; capture HTTP code & body separately
-          HTTP=$(curl -s -w "%{http_code}" -o response.json \
-            -X POST \
-            -H "accept: application/json" \
-            -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-            -H "Content-Type: application/json" \
-            "${TESTSIGMA_API_URL}/execution_results" \
-            -d "$payload")
+          RESPONSE=$(curl -sS -X POST "$TESTSIGMA_BASE_URL/api/v1/execution_results" \
+            -H "Content-type: application/json" \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer $TESTSIGMA_API_KEY" \
+            -d "$PAYLOAD")
 
-          echo "HTTP=$HTTP"
-          echo "Trigger response saved to response.json"
-          # Print the first lines of the JSON so you can see fields like id/executionStatus
-          head -n 60 response.json || true
+          echo "Trigger response:"
+          echo "$RESPONSE" | jq .
 
-          if [[ "$HTTP" != "200" && "$HTTP" != "201" ]]; then
-            echo "❌ Trigger failed (HTTP $HTTP)."
+          # Run ID can appear as .id (based on your logs). We also check fallback paths.
+          RUN_ID=$(echo "$RESPONSE" | jq -r '.id // .result.id // empty')
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "❌ ERROR: Could not parse Run ID from trigger response."
             exit 1
           fi
 
-          # Extract the run id from common response shapes
-          RUN_ID=$(jq -r '.id // .runId // .data.id // .data.runId' response.json)
-          if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
-            echo "❌ Could not extract RUN ID from trigger response."
-            exit 1
-          fi
-
-          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
-          echo "Triggered TestSigma Run ID: $RUN_ID"
-
-      # ---- POLL (compact, balanced, no YAML pitfalls) ----
-      - name: Poll TestSigma Execution Status
-        shell: bash
-        env:
-          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_API_URL: ${{ env.TESTSIGMA_API_URL }}
-          RUN_ID: ${{ env.RUN_ID }}
-        run: |
-          set -euo pipefail
-          echo "Polling status for run $RUN_ID"
-
-          ATTEMPTS=60     # ~10 minutes
-          SLEEP_SECS=10
-          FINAL_STATUS=""
-
-          for ((i=1; i<=ATTEMPTS; i++)); do
-            HTTP=$(curl -s -w "%{http_code}" -o status.json \
-              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-              -H "accept: application/json" \
-              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
-
-            STATUS=$(jq -r '.result // .status // .state // .executionStatus // .data.status // .data.result // .data.state' status.json)
-            echo "[Attempt $i/$ATTEMPTS] HTTP=$HTTP STATUS=$STATUS"
-
-            if [[ "$HTTP" == "401" ]]; then
-              echo "❌ Unauthorized while polling. Check TESTSIGMA_API_KEY."
-              exit 1
-            fi
-            if [[ "$HTTP" == "404" ]]; then
-              echo "❌ Run not found (404). RUN_ID may be invalid."
-              cat status.json || true
-              exit 1
-            fi
-
-            case "$STATUS" in
-              SUCCESS|PASSED|COMPLETED) FINAL_STATUS="$STATUS"; break ;;
-              FAILED|FAILURE|ERROR|ABORTED)     FINAL_STATUS="$STATUS"; break ;;
-            esac
-
-            sleep $SLEEP_SECS
-          done
-
-          echo "Final status JSON:"
-          cat status.json || true
-
-          if [[ -z "$FINAL_STATUS" ]]; then
-            echo "❌ Timed out waiting for run $RUN_ID"
-            exit 1
-          fi
-          echo "Final status: $FINAL_STATUS"
-
-          if [[ "$FINAL_STATUS" != "SUCCESS" && "$FINAL_STATUS" != "PASSED" && "$FINAL_STATUS" != "COMPLETED" ]]; then
-            echo "❌ TestSigma run finished with failing status: $FINAL_STATUS"
-            exit 1
-          fi
-
-          echo "✅ TestSigma execution completed successfully."
-
-      - name: Upload TestSigma Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: testsigma-execution-${{ env.RUN_ID }}
-          path: |
-            response.json
-            status.json
