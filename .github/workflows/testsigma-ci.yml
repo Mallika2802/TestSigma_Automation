@@ -1,54 +1,147 @@
-name: Testsigma - Run Test Plan
+name: Testsigma - Parallel Sanity Suites
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   testsigma:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: CUCS_SANITY
+            testplan_secret: TESTSIGMA_CUCS_SANITY_SUITE
+          - name: TPS_SANITY
+            testplan_secret: TESTSIGMA_TPS_SANITY_SUITE
+
     env:
-      TESTSIGMA_BASE_URL: https://app.testsigma.com
+      TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
 
     steps:
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-      - name: Trigger Testsigma Execution (Test Plan)
+      - name: Trigger Testsigma Execution (${{ matrix.suite.name }})
         id: trigger
+        shell: bash
         env:
           TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          TESTSIGMA_TESTPLAN_ID: ${{ secrets.TESTSIGMA_TESTPLAN_ID }}
+          TESTSIGMA_TESTPLAN_ID: ${{ secrets[matrix.suite.testplan_secret] }}
           TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }}
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Triggering Testsigma Test Plan..."
-          echo "Test Plan ID: $TESTSIGMA_TESTPLAN_ID"
-          echo "Environment ID: $TESTSIGMA_ENVIRONMENT_ID"
+          echo "=== Triggering Testsigma: ${{ matrix.suite.name }} ==="
+          echo "TestPlanId=$TESTSIGMA_TESTPLAN_ID  EnvironmentId=$TESTSIGMA_ENVIRONMENT_ID"
 
-          PAYLOAD=$(jq -n \
-            --arg executionId "$TESTSIGMA_TESTPLAN_ID" \
-            --arg environmentId "$TESTSIGMA_ENVIRONMENT_ID" \
-            '{executionId: $executionId, environmentId: $environmentId}')
+          # Build payload as NUMBERS (important)
+          payload=$(jq -n \
+            --arg exec "$TESTSIGMA_TESTPLAN_ID" \
+            --arg envId "$TESTSIGMA_ENVIRONMENT_ID" \
+            '{executionId:($exec|tonumber), environmentId:($envId|tonumber)}')
 
-          echo "Trigger payload:"
-          echo "$PAYLOAD"
+          echo "Payload: $payload"
 
-          RESPONSE=$(curl -sS -X POST "$TESTSIGMA_BASE_URL/api/v1/execution_results" \
-            -H "Content-type: application/json" \
-            -H "Accept: application/json" \
-            -H "Authorization: Bearer $TESTSIGMA_API_KEY" \
-            -d "$PAYLOAD")
+          HTTP=$(curl -sS -w "%{http_code}" -o response.json \
+            -X POST \
+            -H "accept: application/json" \
+            -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+            -H "Content-Type: application/json" \
+            "${TESTSIGMA_API_URL}/execution_results" \
+            -d "$payload")
 
-          echo "Trigger response:"
-          echo "$RESPONSE" | jq .
+          echo "HTTP=$HTTP"
+          cat response.json | jq . || cat response.json
 
-          # Run ID can appear as .id (based on your logs). We also check fallback paths.
-          RUN_ID=$(echo "$RESPONSE" | jq -r '.id // .result.id // empty')
-
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "❌ ERROR: Could not parse Run ID from trigger response."
+          if [[ "$HTTP" != "200" && "$HTTP" != "201" ]]; then
+            echo "❌ Trigger failed for ${{ matrix.suite.name }} (HTTP $HTTP)"
             exit 1
           fi
 
+          RUN_ID=$(jq -r '.id // .result.id // .data.id // empty' response.json)
+          if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
+            echo "❌ Could not extract RUN_ID for ${{ matrix.suite.name }}"
+            exit 1
+          fi
+
+          echo "✅ RUN_ID=$RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+          echo "Run URL: https://app.testsigma.com/ui/executions/${RUN_ID}"
+
+      - name: Poll Testsigma Until Complete (${{ matrix.suite.name }})
+        shell: bash
+        env:
+          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          echo "=== Polling Testsigma: ${{ matrix.suite.name }} | RUN_ID=$RUN_ID ==="
+          echo "Run URL: https://app.testsigma.com/ui/executions/${RUN_ID}"
+
+          # Up to 60 minutes: 240 * 15s
+          ATTEMPTS=240
+          SLEEP_SECS=15
+
+          for ((i=1; i<=ATTEMPTS; i++)); do
+            HTTP=$(curl -sS -w "%{http_code}" -o status.json \
+              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+              -H "accept: application/json" \
+              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}")
+
+            STATUS=$(jq -r '.status // .data.status // empty' status.json)
+            RESULT=$(jq -r '.result // .data.result // empty' status.json)
+            MESSAGE=$(jq -r '.message // .data.message // empty' status.json)
+
+            echo "[${{ matrix.suite.name }} Attempt $i/$ATTEMPTS] HTTP=$HTTP STATUS=$STATUS RESULT=$RESULT MESSAGE=$MESSAGE"
+
+            if [[ "$HTTP" == "401" ]]; then
+              echo "❌ Unauthorized (401). Check TESTSIGMA_API_KEY."
+              exit 1
+            fi
+
+            if [[ "$HTTP" == "404" ]]; then
+              echo "❌ Run not found (404). RUN_ID invalid?"
+              cat status.json || true
+              exit 1
+            fi
+
+            # Terminal SUCCESS
+            if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
+              echo "✅ Finished: STATUS=$STATUS RESULT=$RESULT"
+
+              if [[ "$RESULT" == "PASSED" || "$RESULT" == "PASS" ]]; then
+                echo "✅ ${{ matrix.suite.name }} PASSED"
+                exit 0
+              else
+                echo "❌ ${{ matrix.suite.name }} NOT PASSED. RESULT=$RESULT"
+                exit 1
+              fi
+            fi
+
+            # Terminal FAILURE
+            if [[ "$STATUS" == "STATUS_FAILED" || "$STATUS" == "STATUS_ABORTED" || "$STATUS" == "STATUS_STOPPED" || "$STATUS" == "STATUS_CANCELLED" ]]; then
+              echo "❌ ${{ matrix.suite.name }} FAILED: STATUS=$STATUS RESULT=$RESULT"
+              exit 1
+            fi
+
+            sleep $SLEEP_SECS
+          done
+
+          echo "❌ Timed out waiting for ${{ matrix.suite.name }} (RUN_ID=$RUN_ID)"
+          cat status.json || true
+          exit 1
+
+      - name: Upload Artifacts (${{ matrix.suite.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testsigma-${{ matrix.suite.name }}-${{ steps.trigger.outputs.run_id }}
+          path: |
+            response.json
+            status.json
