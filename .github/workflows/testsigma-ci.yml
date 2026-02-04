@@ -1,7 +1,13 @@
 name: Testsigma - Parallel Sanity Suites
 
+
 on:
   workflow_dispatch: {}
+
+  schedule:
+    - cron: "15 12 4 2 *"   # Only Feb 4 at 5:45 PM IST
+
+
 
 jobs:
   testsigma:
