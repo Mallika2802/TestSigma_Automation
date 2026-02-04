@@ -4,9 +4,8 @@ name: Testsigma - Parallel Sanity Suites
 on:
   workflow_dispatch: {}
 
-  schedule:
-    - cron: "15 12 4 2 *"   # Only Feb 4 at 5:45 PM IST
-
+schedule:
+    - cron: "50 12 * * *"   # Daily at 6:20 PM IST (12:50 UTC)
 
 
 jobs:
