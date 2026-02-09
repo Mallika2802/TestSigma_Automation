@@ -1,11 +1,9 @@
 name: Testsigma - Parallel Sanity Suites
 
-
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "45 13 * * *"   # Daily at 7:15 PM IST (13:45 UTC)
-
+    - cron: "0 13 * * *"   # Daily at 6:30 PM IST (13:00 UTC)
 
 jobs:
   testsigma:
@@ -22,8 +20,14 @@ jobs:
 
     env:
       TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
+      TZ: "Asia/Kolkata" # Makes `date` show IST in logs
 
     steps:
+      - name: Show current time (IST + UTC)
+        run: |
+          echo "Now (IST): $(date)"
+          echo "Now (UTC): $(date -u)"
+
       - name: Install jq
         run: |
           sudo apt-get update -y
@@ -105,7 +109,7 @@ jobs:
             if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
               echo "✅ Finished: STATUS=$STATUS RESULT=$RESULT"
 
-              # Treat SUCCESS as PASS too (fix)
+              # Treat SUCCESS as PASS too
               if [[ "$RESULT" == "PASSED" || "$RESULT" == "PASS" || "$RESULT" == "SUCCESS" ]]; then
                 echo "✅ ${{ matrix.suite.name }} PASSED ($RESULT)"
                 exit 0
@@ -121,7 +125,7 @@ jobs:
               exit 1
             fi
 
-            sleep $SLEEP_SECS
+            sleep "$SLEEP_SECS"
           done
 
           echo "❌ Timed out waiting for ${{ matrix.suite.name }} (RUN_ID=$RUN_ID)"
