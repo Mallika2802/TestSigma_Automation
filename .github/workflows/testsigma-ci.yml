@@ -1,7 +1,7 @@
 name: Testsigma - Parallel Sanity Suites
 
 on:
- workflow_dispatch: {}
+  workflow_dispatch: {}
   schedule:
     - cron: "30 3 * * *"   # Daily at 9:00 AM IST (03:30 UTC)
 
