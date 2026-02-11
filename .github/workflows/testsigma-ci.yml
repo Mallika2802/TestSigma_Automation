@@ -2,7 +2,8 @@ name: Testsigma - Parallel Sanity Suites
 
 on:
   workflow_dispatch: {}
-
+  schedule:
+    - cron: "30 11 * * *"   # 05:00 PM IST (11:30 UTC)
 
 jobs:
   testsigma:
@@ -12,10 +13,25 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - name: CUCS_SANITY
+          # ---- CUCS test plans ----
+          - name: CUCS_SANITY_WINDOWS
             testplan_secret: CUCS_WINDOWS_ALL_LATEST_BROWSERS
-          - name: TPS_SANITY
+
+          - name: CUCS_SANITY_MAC
+            testplan_secret: CUCS_MAC_ALL_LATEST_BROWSERS
+
+          - name: CUCS_SANITY_LINUX
+            testplan_secret: CUCS_LINUX_ALL_LATEST_BROWSERS
+
+          # ---- TPS test plans ----
+          - name: TPS_SANITY_WINDOWS
             testplan_secret: TPS_WINDOWS_ALL_LATEST_BROWSERS
+
+          - name: TPS_SANITY_MAC
+            testplan_secret: TPS_MAC_ALL_LATEST_BROWSERS
+
+          - name: TPS_SANITY_LINUX
+            testplan_secret: TPS_LINUX_ALL_LATEST_BROWSERS
 
     env:
       TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
@@ -54,7 +70,7 @@ jobs:
             -d "$payload")
 
           echo "HTTP=$HTTP"
-          cat response.json | jq . || cat response.json
+          jq . response.json || cat response.json
 
           if [[ "$HTTP" != "200" && "$HTTP" != "201" ]]; then
             echo "❌ Trigger failed (HTTP $HTTP)"
@@ -101,8 +117,6 @@ jobs:
             # Terminal success states
             if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
               echo "✅ Finished: STATUS=$STATUS RESULT=$RESULT"
-
-              # Treat SUCCESS as PASS too (fix)
               if [[ "$RESULT" == "PASSED" || "$RESULT" == "PASS" || "$RESULT" == "SUCCESS" ]]; then
                 echo "✅ ${{ matrix.suite.name }} PASSED ($RESULT)"
                 exit 0
@@ -118,7 +132,7 @@ jobs:
               exit 1
             fi
 
-            sleep $SLEEP_SECS
+            sleep "$SLEEP_SECS"
           done
 
           echo "❌ Timed out waiting for ${{ matrix.suite.name }} (RUN_ID=$RUN_ID)"
