@@ -3,8 +3,7 @@ name: Testsigma - Parallel Sanity Suites
 on:
   workflow_dispatch: {}
   schedule:
-    -  cron: "45 7 * * *"   # 01:15 PM IST (07:45 UTC)
-
+    - cron: "0 9 * * *"     # 02:30 PM IST (09:00 UTC)
 
 jobs:
   testsigma:
@@ -41,96 +40,3 @@ jobs:
           echo "=== Triggering Testsigma: ${{ matrix.suite.name }} ==="
           echo "TestPlanId=$TESTSIGMA_TESTPLAN_ID  EnvironmentId=$TESTSIGMA_ENVIRONMENT_ID"
 
-          # Build payload as NUMBERS
-          payload=$(jq -n \
-            --arg exec "$TESTSIGMA_TESTPLAN_ID" \
-            --arg envId "$TESTSIGMA_ENVIRONMENT_ID" \
-            '{executionId:($exec|tonumber), environmentId:($envId|tonumber)}')
-
-          HTTP=$(curl -sS -w "%{http_code}" -o response.json \
-            -X POST \
-            -H "accept: application/json" \
-            -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-            -H "Content-Type: application/json" \
-            "${TESTSIGMA_API_URL}/execution_results" \
-            -d "$payload")
-
-          echo "HTTP=$HTTP"
-          cat response.json | jq . || cat response.json
-
-          if [[ "$HTTP" != "200" && "$HTTP" != "201" ]]; then
-            echo "❌ Trigger failed (HTTP $HTTP)"
-            exit 1
-          fi
-
-          RUN_ID=$(jq -r '.id // .result.id // .data.id // empty' response.json)
-          if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
-            echo "❌ Could not extract RUN_ID"
-            exit 1
-          fi
-
-          echo "✅ RUN_ID=$RUN_ID"
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "Run URL: https://app.testsigma.com/ui/executions/${RUN_ID}"
-
-      - name: Poll Testsigma Until Complete (${{ matrix.suite.name }})
-        shell: bash
-        env:
-          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
-          RUN_ID: ${{ steps.trigger.outputs.run_id }}
-        run: |
-          set -euo pipefail
-
-          echo "=== Polling: ${{ matrix.suite.name }} | RUN_ID=$RUN_ID ==="
-          echo "Run URL: https://app.testsigma.com/ui/executions/${RUN_ID}"
-
-          # 60 minutes max => 240 * 15s
-          ATTEMPTS=240
-          SLEEP_SECS=15
-
-          for ((i=1; i<=ATTEMPTS; i++)); do
-            curl -sS -o status.json \
-              -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-              -H "accept: application/json" \
-              "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}"
-
-            STATUS=$(jq -r '.status // .data.status // empty' status.json)
-            RESULT=$(jq -r '.result // .data.result // empty' status.json)
-            MESSAGE=$(jq -r '.message // .data.message // empty' status.json)
-
-            echo "[${{ matrix.suite.name }} Attempt $i/$ATTEMPTS] STATUS=$STATUS RESULT=$RESULT MESSAGE=$MESSAGE"
-
-            # Terminal success states
-            if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
-              echo "✅ Finished: STATUS=$STATUS RESULT=$RESULT"
-
-              # Treat SUCCESS as PASS too (fix)
-              if [[ "$RESULT" == "PASSED" || "$RESULT" == "PASS" || "$RESULT" == "SUCCESS" ]]; then
-                echo "✅ ${{ matrix.suite.name }} PASSED ($RESULT)"
-                exit 0
-              else
-                echo "❌ ${{ matrix.suite.name }} NOT PASSED. RESULT=$RESULT"
-                exit 1
-              fi
-            fi
-
-            # Terminal failure states
-            if [[ "$STATUS" == "STATUS_FAILED" || "$STATUS" == "STATUS_ABORTED" || "$STATUS" == "STATUS_STOPPED" || "$STATUS" == "STATUS_CANCELLED" ]]; then
-              echo "❌ ${{ matrix.suite.name }} FAILED. STATUS=$STATUS RESULT=$RESULT"
-              exit 1
-            fi
-
-            sleep $SLEEP_SECS
-          done
-
-          echo "❌ Timed out waiting for ${{ matrix.suite.name }} (RUN_ID=$RUN_ID)"
-          exit 1
-
-      - name: Upload Artifacts (${{ matrix.suite.name }})
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: testsigma-${{ matrix.suite.name }}-${{ steps.trigger.outputs.run_id }}
-          path: |
-            response.json
-            status.json
