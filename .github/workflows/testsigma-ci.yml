@@ -23,15 +23,6 @@ jobs:
           - name: CUCS_SANITY_LINUX
             testplan_secret: CUCS_LINUX_ALL_LATEST_BROWSERS
 
-          # ---- TPS test plans ----
-          - name: TPS_SANITY_WINDOWS
-            testplan_secret: TPS_WINDOWS_ALL_LATEST_BROWSERS
-
-          - name: TPS_SANITY_MAC
-            testplan_secret: TPS_MAC_ALL_LATEST_BROWSERS
-
-          - name: TPS_SANITY_LINUX
-            testplan_secret: TPS_LINUX_ALL_LATEST_BROWSERS
 
     env:
       TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
