@@ -1,4 +1,4 @@
-name: Testsigma - Parallel Sanity Suites
+name: Testsigma - Parallel CUCS Suites
 
 on:
   workflow_dispatch: {}
