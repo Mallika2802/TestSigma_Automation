@@ -3,7 +3,7 @@ name: Testsigma - Parallel TPS Suites
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 6 * * *"   # 11:30 AM IST (06:00 UTC)
+    - cron: "0 9 * * *"   # 02:30 PM IST (09:00 UTC)
 
 jobs:
   testsigma:
