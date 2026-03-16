@@ -92,12 +92,12 @@ jobs:
       - name: Generate HTML Report (${{ matrix.suite.name }})
         if: always()
         run: |
-          python - <<'PY'
-          import json, os, datetime, html
+          python << 'EOF'
+          import json, html
 
           def load(path):
               try:
-                  with open(path) as f:
+                  with open(path, "r") as f:
                       return json.load(f)
               except:
                   return {}
@@ -105,22 +105,42 @@ jobs:
           response = load("response.json")
           status = load("status.json")
 
-          def fmt(ms):
-              try:
-                  return datetime.datetime.utcfromtimestamp(ms/1000).strftime("%Y-%m-%d %H:%M:%S UTC")
-              except:
-                  return "N/A"
+          res_html = html.escape(json.dumps(response, indent=2))
+          stat_html = html.escape(json.dumps(status, indent=2))
 
-          run_id = os.getenv("RUN_ID", "")
-          plan_name = (status.get("execution") or {}).get("name", "N/A")
-          env_name = (status.get("environment") or {}).get("name", "N/A")
-
-          html_out = f"""
+          html_out = """
           <html>
           <head>
-            <title>CUCS Sanity Linux Report</title>
+            <title>CUCS SANITY LINUX REPORT</title>
             <style>
-              body {{ font-family: Arial; padding:20px; color:#222; }}
-              h1 {{ color:#1d4ed8; }}
-              h2 {{ border-bottom:1px solid #ccc; }}
-              pre {{ background:#111; color:#eee; padding:12px; border-radius:8px; }}
+              body { font-family: Arial; padding: 20px; }
+              pre { background: #111; color: #eee; padding: 15px; border-radius: 8px; }
+              h1 { color: #1d4ed8; }
+            </style>
+          </head>
+          <body>
+            <h1>CUCS SANITY LINUX - REPORT</h1>
+
+            <h2>response.json</h2>
+            <pre>{RESPONSE}</pre>
+
+            <h2>status.json</h2>
+            <pre>{STATUS}</pre>
+
+          </body>
+          </html>
+          """.replace("{RESPONSE}", res_html).replace("{STATUS}", stat_html)
+
+          with open("cucs_sanity_linux_report.html", "w") as f:
+              f.write(html_out)
+
+          print("HTML report generated successfully!")
+          EOF
+
+      - name: Upload Artifacts (${{ matrix.suite.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CUCS_SANITY_LINUX_REPORT
+          path: |
+            response.json
