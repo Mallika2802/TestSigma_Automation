@@ -76,6 +76,7 @@ jobs:
             echo "[$i/$ATTEMPTS] STATUS=$STATUS RESULT=$RESULT"
 
             if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
+              # status.json just written above now reflects the final state
               exit 0
             fi
 
@@ -91,9 +92,11 @@ jobs:
 
       - name: Generate HTML Report (${{ matrix.suite.name }})
         if: always()
+        env:
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
         run: |
           python << 'EOF'
-          import json, html
+          import json, html, os, datetime
 
           def load(path):
               try:
@@ -102,8 +105,24 @@ jobs:
               except:
                   return {}
 
+          def ts(ms):
+              try:
+                  return datetime.datetime.utcfromtimestamp(ms/1000).strftime("%Y-%m-%d %H:%M:%S UTC")
+              except:
+                  return "N/A"
+
           response = load("response.json")
           status = load("status.json")
+
+          # Build a small summary (safe: no f-strings in template)
+          run_id = os.getenv("RUN_ID", "") or str(status.get("id") or response.get("id") or "")
+          plan_name  = (status.get("execution") or {}).get("name", "N/A")
+          env_name   = (status.get("environment") or {}).get("name", "N/A")
+          start      = ts(status.get("startTime") or response.get("startTime"))
+          end        = ts(status.get("endTime"))
+          duration   = str(status.get("duration", "N/A"))
+          status_txt = status.get("status", "N/A")
+          result_txt = status.get("result", "N/A")
 
           res_html = html.escape(json.dumps(response, indent=2))
           stat_html = html.escape(json.dumps(status, indent=2))
@@ -111,31 +130,64 @@ jobs:
           html_out = """
           <html>
           <head>
+            <meta charset="utf-8">
             <title>CUCS SANITY LINUX REPORT</title>
             <style>
-              body { font-family: Arial; padding: 20px; }
-              pre { background: #111; color: #eee; padding: 15px; border-radius: 8px; }
-              h1 { color: #1d4ed8; }
+              body { font-family: Arial; padding: 20px; color:#1f2937; }
+              h1 { color:#1d4ed8; }
+              h2 { border-bottom:1px solid #e5e7eb; padding-bottom:4px; }
+              .grid { display:grid; grid-template-columns:220px 1fr; gap:8px 12px; }
+              .key { font-weight:600; color:#374151; }
+              pre { background:#111827; color:#e5e7eb; padding:12px; border-radius:8px; overflow:auto; }
             </style>
           </head>
           <body>
-            <h1>CUCS SANITY LINUX - REPORT</h1>
+            <h1>CUCS SANITY LINUX — Report</h1>
+
+            <h2>Summary</h2>
+            <div class="grid">
+              <div class="key">Run ID</div><div>{RUN_ID}</div>
+              <div class="key">Test Plan</div><div>{PLAN}</div>
+              <div class="key">Environment</div><div>{ENV}</div>
+              <div class="key">Start Time</div><div>{START}</div>
+              <div class="key">End Time</div><div>{END}</div>
+              <div class="key">Duration (ms)</div><div>{DUR}</div>
+              <div class="key">Status</div><div>{STATUS}</div>
+              <div class="key">Result</div><div>{RESULT}</div>
+            </div>
 
             <h2>response.json</h2>
             <pre>{RESPONSE}</pre>
 
             <h2>status.json</h2>
-            <pre>{STATUS}</pre>
-
+            <pre>{STATUS_JSON}</pre>
           </body>
           </html>
-          """.replace("{RESPONSE}", res_html).replace("{STATUS}", stat_html)
+          """
+          html_out = (html_out
+            .replace("{RUN_ID}", html.escape(run_id))
+            .replace("{PLAN}", html.escape(plan_name))
+            .replace("{ENV}", html.escape(env_name))
+            .replace("{START}", html.escape(start))
+            .replace("{END}", html.escape(end))
+            .replace("{DUR}", html.escape(duration))
+            .replace("{STATUS}", html.escape(status_txt))
+            .replace("{RESULT}", html.escape(result_txt))
+            .replace("{RESPONSE}", res_html)
+            .replace("{STATUS_JSON}", stat_html)
+          )
 
-          with open("cucs_sanity_linux_report.html", "w") as f:
+          with open("cucs_sanity_linux_report.html", "w", encoding="utf-8") as f:
               f.write(html_out)
 
           print("HTML report generated successfully!")
           EOF
+
+      - name: List files created (debug)
+        if: always()
+        run: |
+          echo "Workspace content before upload:"
+          ls -al
 
       - name: Upload Artifacts (${{ matrix.suite.name }})
         if: always()
@@ -144,3 +196,6 @@ jobs:
           name: CUCS_SANITY_LINUX_REPORT
           path: |
             response.json
+            status.json
+            cucs_sanity_linux_report.html
+          # retention-days: 14  # (optional) keep artifacts for 14 days
