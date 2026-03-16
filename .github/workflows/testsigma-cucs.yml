@@ -76,7 +76,6 @@ jobs:
             echo "[$i/$ATTEMPTS] STATUS=$STATUS RESULT=$RESULT"
 
             if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
-              # status.json just written above now reflects the final state
               exit 0
             fi
 
@@ -114,8 +113,9 @@ jobs:
           response = load("response.json")
           status = load("status.json")
 
-          # Build a small summary (safe: no f-strings in template)
           run_id = os.getenv("RUN_ID", "") or str(status.get("id") or response.get("id") or "")
+          run_url = f"https://app.testsigma.com/ui/executions/{run_id}" if run_id else "#"
+
           plan_name  = (status.get("execution") or {}).get("name", "N/A")
           env_name   = (status.get("environment") or {}).get("name", "N/A")
           start      = ts(status.get("startTime") or response.get("startTime"))
@@ -127,22 +127,34 @@ jobs:
           res_html = html.escape(json.dumps(response, indent=2))
           stat_html = html.escape(json.dumps(status, indent=2))
 
+          status_class = "ok" if status_txt in ("STATUS_COMPLETED","STATUS_FINISHED") else ("bad" if status_txt.startswith("STATUS_FAIL") else "warn")
+          result_class = "ok" if result_txt in ("SUCCESS","PASSED","PASS") else ("bad" if result_txt in ("FAILED","FAIL") else "warn")
+
           html_out = """
           <html>
           <head>
             <meta charset="utf-8">
-            <title>CUCS SANITY LINUX REPORT</title>
+            <title>CUCS SANITY LINUX — Report</title>
             <style>
-              body { font-family: Arial; padding: 20px; color:#1f2937; }
-              h1 { color:#1d4ed8; }
-              h2 { border-bottom:1px solid #e5e7eb; padding-bottom:4px; }
-              .grid { display:grid; grid-template-columns:220px 1fr; gap:8px 12px; }
-              .key { font-weight:600; color:#374151; }
-              pre { background:#111827; color:#e5e7eb; padding:12px; border-radius:8px; overflow:auto; }
+              body { font-family: Arial, Helvetica, sans-serif; padding: 20px; color: #1f2937; }
+              h1 { color: #1d4ed8; margin-bottom: 6px; }
+              h2 { border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+              .grid { display: grid; grid-template-columns: 220px 1fr; gap: 8px 12px; }
+              .key { font-weight: 600; color: #374151; }
+              .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; }
+              .ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+              .bad { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+              .warn { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+              pre { background: #111827; color: #e5e7eb; padding: 12px; border-radius: 8px; overflow: auto; }
+              a.btn { background:#1d4ed8; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; }
+              .toolbar { margin: 8px 0 18px 0; }
             </style>
           </head>
           <body>
             <h1>CUCS SANITY LINUX — Report</h1>
+            <div class="toolbar">
+              <RUN_URL}Open in Testsigma</a>
+            </div>
 
             <h2>Summary</h2>
             <div class="grid">
@@ -152,8 +164,8 @@ jobs:
               <div class="key">Start Time</div><div>{START}</div>
               <div class="key">End Time</div><div>{END}</div>
               <div class="key">Duration (ms)</div><div>{DUR}</div>
-              <div class="key">Status</div><div>{STATUS}</div>
-              <div class="key">Result</div><div>{RESULT}</div>
+              <div class="key">Status</div><div><span class="pill {STATUS_CLASS}">{STATUS}</span></div>
+              <div class="key">Result</div><div><span class="pill {RESULT_CLASS}">{RESULT}</span></div>
             </div>
 
             <h2>response.json</h2>
@@ -164,8 +176,10 @@ jobs:
           </body>
           </html>
           """
+
           html_out = (html_out
             .replace("{RUN_ID}", html.escape(run_id))
+            .replace("{RUN_URL}", html.escape(run_url))
             .replace("{PLAN}", html.escape(plan_name))
             .replace("{ENV}", html.escape(env_name))
             .replace("{START}", html.escape(start))
@@ -173,6 +187,8 @@ jobs:
             .replace("{DUR}", html.escape(duration))
             .replace("{STATUS}", html.escape(status_txt))
             .replace("{RESULT}", html.escape(result_txt))
+            .replace("{STATUS_CLASS}", status_class)
+            .replace("{RESULT_CLASS}", result_class)
             .replace("{RESPONSE}", res_html)
             .replace("{STATUS_JSON}", stat_html)
           )
@@ -198,4 +214,3 @@ jobs:
             response.json
             status.json
             cucs_sanity_linux_report.html
-          # retention-days: 14  # (optional) keep artifacts for 14 days
