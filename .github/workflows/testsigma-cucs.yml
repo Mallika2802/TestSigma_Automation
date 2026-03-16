@@ -23,7 +23,6 @@ jobs:
           - name: CUCS_SANITY_LINUX
             testplan_secret: CUCS_LINUX_ALL_LATEST_BROWSERS
 
-
     env:
       TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
 
@@ -128,6 +127,67 @@ jobs:
 
           echo "❌ Timed out waiting for ${{ matrix.suite.name }} (RUN_ID=$RUN_ID)"
           exit 1
+
+      # ─────────────────────────────────────────────────────────────
+      # HTML REPORT (JUnit XML → HTML) — runs after polling completes
+      # ─────────────────────────────────────────────────────────────
+      - name: (Optional) Download JUnit XML for ${{ matrix.suite.name }}
+        if: always()
+        env:
+          TESTSIGMA_API_KEY: ${{ secrets.TESTSIGMA_API_KEY }}
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+
+          echo "If your account has JUnit export enabled, you can save the XML into ./test-results/"
+          echo "Manual export path: Testsigma UI → Run Results → Export → 'JUnit report' (XML)."
+          echo "Docs: https://github.com/testsigmahq/testsigma-docs/blob/dev/src/pages/docs/reports/export-reports/export-reports-junit.md"
+
+          # If you have a direct API endpoint for JUnit XML, put it here (replace and uncomment):
+          # curl -fSL -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
+          #   "https://app.testsigma.com/api/v1/execution_results/${RUN_ID}/junit" \
+          #   -o "test-results/${RUN_ID}-${{ matrix.suite.name }}.xml" || true
+
+          if ! ls test-results/*.xml >/dev/null 2>&1; then
+            echo "NOTE: No JUnit XML present in ./test-results yet – conversion will skip gracefully."
+          fi
+
+      - name: Install junit2html
+        if: always()
+        run: |
+          python3 -m pip install --user junit2html
+
+      - name: Convert JUnit → HTML (${{ matrix.suite.name }})
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p html-report
+          if compgen -G "test-results/*.xml" > /dev/null; then
+            echo "Found JUnit XML files:"
+            ls -lah test-results/*.xml || true
+            # Convert all XMLs under test-results into a single HTML index
+            ~/.local/bin/junit2html test-results html-report/index.html
+            echo "HTML report created at html-report/index.html"
+          else
+            echo "No JUnit XML found under ./test-results — skipping HTML conversion."
+            # Still upload a friendly placeholder page
+            cat > html-report/index.html <<'HTML'
+            <!doctype html>
+            <meta charset="utf-8">
+            <title>No JUnit XML found</title>
+            <h1>No JUnit XML found</h1>
+            <p>This workflow did not find any JUnit XML in <code>./test-results</code> for conversion.</p>
+            <p>Export JUnit from Testsigma Run Results (Export → JUnit report) and place it under <code>test-results/</code> to generate a report on the next run.</p>
+            HTML
+          fi
+
+      - name: Upload HTML report (${{ matrix.suite.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testsigma-junit-html-${{ matrix.suite.name }}
+          path: html-report
 
       - name: Upload Artifacts (${{ matrix.suite.name }})
         if: always()
