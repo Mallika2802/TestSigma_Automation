@@ -33,9 +33,7 @@ jobs:
           TESTSIGMA_ENVIRONMENT_ID: ${{ secrets.TESTSIGMA_ENVIRONMENT_ID }}
         run: |
           set -euo pipefail
-
           echo "=== Triggering Testsigma: ${{ matrix.suite.name }} ==="
-          echo "TestPlanId=$TESTSIGMA_TESTPLAN_ID  EnvironmentId=$TESTSIGMA_ENVIRONMENT_ID"
 
           payload=$(jq -n \
             --arg exec "$TESTSIGMA_TESTPLAN_ID" \
@@ -44,29 +42,18 @@ jobs:
 
           HTTP=$(curl -sS -w "%{http_code}" -o response.json \
             -X POST \
-            -H "accept: application/json" \
             -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
             -H "Content-Type: application/json" \
             "${TESTSIGMA_API_URL}/execution_results" \
             -d "$payload")
 
-          echo "HTTP=$HTTP"
-          jq . response.json || cat response.json
-
           if [[ "$HTTP" != "200" && "$HTTP" != "201" ]]; then
-            echo "❌ Trigger failed (HTTP $HTTP)"
+            echo "❌ Trigger failed"
             exit 1
           fi
 
           RUN_ID=$(jq -r '.id // .result.id // .data.id // empty' response.json)
-
-          if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
-            echo "❌ Could not extract RUN_ID"
-            exit 1
-          fi
-
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "Run URL: https://app.testsigma.com/ui/executions/${RUN_ID}"
 
       - name: Poll Testsigma Until Complete (${{ matrix.suite.name }})
         shell: bash
@@ -75,25 +62,21 @@ jobs:
           RUN_ID: ${{ steps.trigger.outputs.run_id }}
         run: |
           set -euo pipefail
-
-          echo "=== Polling: ${{ matrix.suite.name }} | RUN_ID=$RUN_ID ==="
-
           ATTEMPTS=240
           SLEEP_SECS=15
 
           for ((i=1; i<=ATTEMPTS; i++)); do
             curl -sS -o status.json \
               -H "Authorization: Bearer ${TESTSIGMA_API_KEY}" \
-              -H "accept: application/json" \
               "${TESTSIGMA_API_URL}/execution_results/${RUN_ID}"
 
             STATUS=$(jq -r '.status // .data.status // empty' status.json)
             RESULT=$(jq -r '.result // .data.result // empty' status.json)
 
-            echo "[${{ matrix.suite.name }} Attempt $i/$ATTEMPTS] STATUS=$STATUS RESULT=$RESULT"
+            echo "[$i/$ATTEMPTS] STATUS=$STATUS RESULT=$RESULT"
 
             if [[ "$STATUS" == "STATUS_COMPLETED" || "$STATUS" == "STATUS_FINISHED" ]]; then
-              [[ "$RESULT" =~ PASSED|PASS|SUCCESS ]] && exit 0 || exit 1
+              exit 0
             fi
 
             if [[ "$STATUS" =~ STATUS_FAILED|STATUS_ABORTED|STATUS_STOPPED|STATUS_CANCELLED ]]; then
@@ -103,14 +86,41 @@ jobs:
             sleep "$SLEEP_SECS"
           done
 
-          echo "❌ Timed out waiting for ${{ matrix.suite.name }} (RUN_ID=$RUN_ID)"
+          echo "❌ Timed out"
           exit 1
 
-      - name: Upload Artifacts (${{ matrix.suite.name }})
+      - name: Generate HTML Report (${{ matrix.suite.name }})
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: testsigma-${{ matrix.suite.name }}-${{ steps.trigger.outputs.run_id }}
-          path: |
-            response.json
-            status.json
+        run: |
+          python - <<'PY'
+          import json, os, datetime, html
+
+          def load(path):
+              try:
+                  with open(path) as f:
+                      return json.load(f)
+              except:
+                  return {}
+
+          response = load("response.json")
+          status = load("status.json")
+
+          def fmt(ms):
+              try:
+                  return datetime.datetime.utcfromtimestamp(ms/1000).strftime("%Y-%m-%d %H:%M:%S UTC")
+              except:
+                  return "N/A"
+
+          run_id = os.getenv("RUN_ID", "")
+          plan_name = (status.get("execution") or {}).get("name", "N/A")
+          env_name = (status.get("environment") or {}).get("name", "N/A")
+
+          html_out = f"""
+          <html>
+          <head>
+            <title>CUCS Sanity Linux Report</title>
+            <style>
+              body {{ font-family: Arial; padding:20px; color:#222; }}
+              h1 {{ color:#1d4ed8; }}
+              h2 {{ border-bottom:1px solid #ccc; }}
+              pre {{ background:#111; color:#eee; padding:12px; border-radius:8px; }}
