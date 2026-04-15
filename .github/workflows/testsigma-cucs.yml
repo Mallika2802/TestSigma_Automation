@@ -14,6 +14,12 @@ jobs:
         suite:
           - name: CUCS_SANITY_LINUX
             testplan_secret: CUCS_LINUX_ALL_LATEST_BROWSERS
+            
+          - name: CUCS_SANITY_WINDOWS
+            testplan_secret: CUCS_WINDOWS_ALL_LATEST_BROWSERS
+ 
+          - name: CUCS_SANITY_MAC
+            testplan_secret: CUCS_MAC_ALL_LATEST_BROWSERS
 
     env:
       TESTSIGMA_API_URL: "https://app.testsigma.com/api/v1"
