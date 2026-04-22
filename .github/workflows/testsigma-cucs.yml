@@ -3,8 +3,7 @@ name: Testsigma - Sanity Linux
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 10 * * *"   # 03:30 PM IST (10:00 UTC)
-
+  - cron: "00 06 * * *"   # 11:30 AM IST (06:00 UTC)
 jobs:
   testsigma-linux:
     runs-on: ubuntu-latest
